@@ -1,5 +1,5 @@
 import React from "react";
-import { useNavigate } from "react-router-dom"; // Adicione este import
+import { useNavigate } from "react-router-dom";
 
 export type StatusMesa = "Em Atendimento" | "Comida Pronta" | "Vazia";
 
@@ -51,16 +51,10 @@ const statusColor = {
 export function WaiterPage() {
   const navigate = useNavigate();
 
-  // Mesas vazias são as que ainda não fizeram pedido
+  // Agora todas as mesas podem ser clicadas para abrir o CreateOrderPage
   const handleSelecionarMesa = (mesa: Mesa) => {
-    if (mesa.status === "Vazia") {
-      navigate(`/create-order/${mesa.id}`);
-    }
-    // Aqui você pode adicionar outras lógicas para mesas já em atendimento ou comida pronta
+    navigate(`/create-order/${mesa.id}`);
   };
-
-  const isMesaAtendida = (mesa: Mesa) =>
-    mesa.status === "Comida Pronta" && mesa.atendida;
 
   return (
     <div style={{ padding: "32px 0", background: "#FAFAFA", minHeight: "100vh" }}>
@@ -81,7 +75,7 @@ export function WaiterPage() {
             return (
               <button
                 key={mesa.id}
-                onClick={() => !isMesaAtendida(mesa) && handleSelecionarMesa(mesa)}
+                onClick={() => handleSelecionarMesa(mesa)}
                 style={{
                   borderRadius: 16,
                   border: style.border,
@@ -92,8 +86,8 @@ export function WaiterPage() {
                   fontWeight: 600,
                   fontSize: 22,
                   boxShadow: "0 1px 4px 0 rgba(0,0,0,0.03)",
-                  opacity: isMesaAtendida(mesa) ? 0.5 : 1,
-                  cursor: isMesaAtendida(mesa) ? "not-allowed" : "pointer",
+                  opacity: 1,
+                  cursor: "pointer",
                   transition: "box-shadow 0.2s",
                   outline: "none"
                 }}
