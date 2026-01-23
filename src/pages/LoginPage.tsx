@@ -7,29 +7,40 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { UseAuth } from "../auth/AuthContext";
+import type { UserRole } from "../auth/authStorage";
 import LockOpenOutlinedIcon from '@mui/icons-material/LockOpenOutlined';
 import ContainerSvg from "../assets/Container.svg";
+import { apiFetch } from "../api/client";
+
+type LoginResponse = {
+  token: string;
+  role: UserRole;
+  userId: string;
+};
 
 export const LoginPage = () => {
   const navigate = useNavigate();
   const { login } = UseAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const loginMutation = useMutation({
+    mutationFn: (payload: { username: string; password: string }) =>
+      apiFetch<LoginResponse>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (data) => {
+      login(data.token, data.role, data.userId);
+      navigate(`/dashboard/${data.role.toLowerCase()}`);
+    },
+  });
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-
-    // Placeholder flow. Replace with API call.
-    const role = username.toLowerCase().includes("kitchen")
-      ? "KITCHEN"
-      : username.toLowerCase().includes("cash")
-        ? "CASHIER"
-        : "WAITER";
-
-    login("dev-token", role);
-    navigate(`/dashboard/${role.toLowerCase()}`);
+    loginMutation.mutate({ username, password });
   };
 
   return (
@@ -92,10 +103,19 @@ export const LoginPage = () => {
               }} 
               type="submit" 
               variant="contained"
+              disabled={loginMutation.isPending}
             >
               <LockOpenOutlinedIcon sx={{ mr: 1 }} />
-              Entrar
+              {loginMutation.isPending ? "Entrando..." : "Entrar"}
             </Button>
+
+            {loginMutation.error ? (
+              <Typography sx={{ color: "error.main", mt: 2, fontSize: 12 }}>
+                {loginMutation.error instanceof Error
+                  ? loginMutation.error.message
+                  : "Login failed"}
+              </Typography>
+            ) : null}
 
           </Box>
         </CardContent>

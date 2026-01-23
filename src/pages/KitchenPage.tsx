@@ -1,6 +1,9 @@
-import { Box, Card, CardContent, Typography, Button, Chip, Badge, colors } from "@mui/material";
-import { useState, useEffect } from "react";
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import { Badge, Box, Button, Card, CardContent, Typography } from "@mui/material";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "../api/client";
+import { useSocket } from "../socket";
 
 interface OrderItem {
   id: string;
@@ -8,182 +11,139 @@ interface OrderItem {
   quantity: number;
 }
 
-interface Order {
-  id: number;
-  status: "NEW" | "IN_PROGRESS" | "READY";
-  createdAt: Date;
+type OrderStatus = "PENDING" | "IN_PROGRESS" | "READY";
+
+interface OrderApi {
+  id: string;
+  table: { number: number };
   items: OrderItem[];
-  priority: "normal" | "urgent";
-  notes?: string;
+  createdAt: string;
+  notes?: string | null;
 }
 
-export const KitchenPage = () => {
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: 1,
-      status: "NEW",
-      createdAt: new Date(Date.now() - 9 * 60000),
-      priority: "urgent",
-      notes: "Sem sal",
-      items: [
-        { id: "1", name: "Bife Ribeye", quantity: 1 },
-        { id: "2", name: "Salada Caesar", quantity: 1 },
-        { id: "3", name: "Vinho (Copo)", quantity: 2 },
-      ],
-    },
-    {
-      id: 10,
-      status: "NEW",
-      createdAt: new Date(Date.now() - 9 * 60000),
-      priority: "urgent",
-      items: [
-        { id: "1", name: "Bolo de Chocolate Quente", quantity: 1 },
-        { id: "2", name: "Cheesecake", quantity: 1 },
-        { id: "3", name: "Café", quantity: 1 },
-      ],
-    },
-    {
-      id: 4,
-      status: "NEW",
-      createdAt: new Date(Date.now() - 4 * 60000),
-      priority: "urgent",
-      items: [
-        { id: "1", name: "Tiramisu", quantity: 1 },
-        { id: "2", name: "Café", quantity: 1 },
-      ],
-    },
-    {
-      id: 5,
-      status: "NEW",
-      createdAt: new Date(Date.now() - 4 * 60000),
-      priority: "normal",
-      notes: "Sem pimenta, alho extra",
-      items: [
-        { id: "1", name: "Refogado de Vegetais", quantity: 1 },
-        { id: "2", name: "Bruschetta", quantity: 1 },
-        { id: "3", name: "Vinho (Copo)", quantity: 1 },
-      ],
-    },
-    {
-      id: 2,
-      status: "IN_PROGRESS",
-      createdAt: new Date(Date.now() - 14 * 60000),
-      priority: "normal",
-      items: [
-        { id: "1", name: "Salmão Grelhado", quantity: 1 },
-        { id: "2", name: "Pasta à Carbonara", quantity: 1 },
-        { id: "3", name: "Sopa do Dia", quantity: 2 },
-      ],
-    },
-    {
-      id: 7,
-      status: "IN_PROGRESS",
-      createdAt: new Date(Date.now() - 14 * 60000),
-      priority: "normal",
-      notes: "Bem passado",
-      items: [
-        { id: "1", name: "Bife Ribeye", quantity: 1 },
-        { id: "2", name: "Salmão Grelhado", quantity: 1 },
-      ],
-    },
-  ]);
+type OrdersByStatus = Record<OrderStatus, OrderApi[]>;
 
-  const [currentTime, setCurrentTime] = useState(new Date());
+const getCardStyles = (status: OrderStatus) => {
+  switch (status) {
+    case "PENDING":
+      return {
+        backgroundColor: "#ffe6e6ff",
+        borderColor: "#ff1c1cff",
+      };
+    case "IN_PROGRESS":
+      return {
+        backgroundColor: "#FFF9E6",
+        borderColor: "#FFB81C",
+      };
+    case "READY":
+      return {
+        backgroundColor: "#E6F7E6",
+        borderColor: "#4CAF50",
+      };
+    default:
+      return {
+        backgroundColor: "#ffffff",
+        borderColor: "#E0E0E0",
+      };
+  }
+};
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
+const getElapsedTime = (currentTime: Date, createdAt: string): string => {
+  const created = new Date(createdAt);
+  const diff = Math.floor((currentTime.getTime() - created.getTime()) / 1000);
 
-    return () => clearInterval(interval);
-  }, []);
+  if (diff < 60) {
+    return `${diff}s`;
+  }
+  if (diff < 3600) {
+    return `${Math.floor(diff / 60)}m`;
+  }
+  return `${Math.floor(diff / 3600)}h`;
+};
 
-  const getElapsedTime = (createdAt: Date): string => {
-    const diff = Math.floor((currentTime.getTime() - createdAt.getTime()) / 1000);
-    
-    if (diff < 60) {
-      return `${diff}s`;
-    } else if (diff < 3600) {
-      return `${Math.floor(diff / 60)}m`;
-    } else {
-      return `${Math.floor(diff / 3600)}h`;
+const OrderCard = ({
+  order,
+  status,
+  currentTime,
+  onUpdateStatus,
+  isUpdating,
+}: {
+  order: OrderApi;
+  status: OrderStatus;
+  currentTime: Date;
+  onUpdateStatus: (orderId: string) => void;
+  isUpdating: boolean;
+}) => {
+  const cardStyles = getCardStyles(status);
+  const itemsRef = useRef<HTMLDivElement | null>(null);
+  const scrollTopRef = useRef(0);
+
+  useLayoutEffect(() => {
+    if (itemsRef.current) {
+      itemsRef.current.scrollTop = scrollTopRef.current;
     }
-  };
+  });
 
-  const handleStartPreparing = (orderId: number) => {
-    setOrders((prevOrders) =>
-      prevOrders.map((order) =>
-        order.id === orderId ? { ...order, status: "IN_PROGRESS" } : order
-      )
-    );
-  };
+  return (
+    <Card
+      sx={{
+        borderRadius: 3,
+        border: `2px solid ${cardStyles.borderColor}`,
+        backgroundColor: cardStyles.backgroundColor,
+        minWidth: 300,
+        maxWidth: 350,
+        fontWeight: "bold",
+      }}
+    >
+      <CardContent sx={{ pb: 2 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+          <Typography
+            variant="h5"
+            sx={{
+              px: 2,
+              py: 1,
+              backgroundColor: "#ffffffff",
+              fontWeight: "bold",
+              borderRadius: 2,
+              fontSize: 28,
+            }}
+          >
+            Mesa {order.table.number}
+          </Typography>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "#666",
+              fontWeight: "bold",
+              fontSize: 18,
+              display: "flex",
+              alignItems: "center",
+              gap: 0.5,
+            }}
+          >
+            <AccessTimeIcon /> {getElapsedTime(currentTime, order.createdAt)}
+          </Typography>
+        </Box>
 
-  const handleMarkReady = (orderId: number) => {
-    setOrders((prevOrders) =>
-      prevOrders.map((order) =>
-        order.id === orderId ? { ...order, status: "READY" } : order
-      )
-    );
-  };
-
-  const newOrders = orders.filter((o) => o.status === "NEW");
-  const inProgressOrders = orders.filter((o) => o.status === "IN_PROGRESS");
-  const readyOrders = orders.filter((o) => o.status === "READY");
-
-  // ⭐ MUDANÇA: Função para obter cores baseado no status
-  const getCardStyles = (status: "NEW" | "IN_PROGRESS" | "READY") => {
-    switch (status) {
-      case "NEW":
-        return {
-          backgroundColor: "#ffe6e6ff",
-          borderColor: "#ff1c1cff",
-        };
-      case "IN_PROGRESS":
-        return {
-          backgroundColor: "#FFF9E6",
-          borderColor: "#FFB81C",
-        };
-      case "READY":
-        return {
-          backgroundColor: "#E6F7E6",
-          borderColor: "#4CAF50",
-        };
-      default:
-        return {
-          backgroundColor: "#ffffff",
-          borderColor: "#E0E0E0",
-        };
-    }
-  };
-
-  const OrderCard = ({ order }: { order: Order }) => {
-    // ⭐ MUDANÇA: Obter estilos de cor baseado no status
-    const cardStyles = getCardStyles(order.status);
-
-    return (
-      <Card
-        sx={{
-          borderRadius: 3,
-          border: `2px solid ${cardStyles.borderColor}`,
-          backgroundColor: cardStyles.backgroundColor,
-          minWidth: 300,
-          maxWidth: 350,
-          fontWeight: "bold"
-        }}
-      >
-        <CardContent sx={{ pb: 2 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
-            <Typography variant="h5"  sx={{ px: 2, py: 1, backgroundColor: "#ffffffff", fontWeight: "bold", borderRadius: 2, fontSize: 28 }}>
-              {order.id}
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#666", fontWeight: "bold", fontSize: 18, display: "flex", alignItems: "center", gap: 0.5 }}>
-              <AccessTimeIcon/> {getElapsedTime(order.createdAt)}
-            </Typography>
-          </Box>
-
+        <Box
+          ref={itemsRef}
+          onScroll={(event) => {
+            scrollTopRef.current = event.currentTarget.scrollTop;
+          }}
+          sx={{
+            maxHeight: 300,
+            overflowY: "auto",
+            pr: 0.5,
+          }}
+        >
           {order.items.map((item) => (
             <Box key={item.id} mb={1}>
-              <Box sx={{backgroundColor: "white", p:1, pr: 2, borderRadius: 2}} display="flex" justifyContent="space-between" alignItems="center">
+              <Box
+                sx={{ backgroundColor: "white", p: 1, pr: 2, borderRadius: 2 }}
+                display="flex"
+                justifyContent="space-between"
+                alignItems="center"
+              >
                 <Typography variant="body2" sx={{ fontWeight: "bold" }}>
                   {item.name}
                 </Typography>
@@ -200,96 +160,137 @@ export const KitchenPage = () => {
               </Box>
             </Box>
           ))}
+        </Box>
 
-          {order.notes && (
-            <Typography
-              variant="caption"
-              sx={{
-                backgroundColor: "#fff490ff",
-                padding: "8px 12px",
-                borderRadius: 1,
-                display: "block",
-                marginTop: 1.5,
-                marginBottom: 1.5,
-                color: "#333",
-                fontWeight: "bold",
-              }}
-            >
-               {order.notes}
-            </Typography>
-          )}
+        {order.notes && (
+          <Box
+            sx={{
+              backgroundColor: "#fff4c2",
+              border: "1px dashed #d4a017",
+              padding: "10px 12px",
+              borderRadius: 2,
+              display: "block",
+              marginTop: 1.5,
+              marginBottom: 1.5,
+              color: "#5c3b00",
+              fontWeight: "bold",
+            }}
+          >
+            Observação: {order.notes}
+          </Box>
+        )}
 
-          {order.status === "NEW" && (
-            <Button
-              fullWidth
-              variant="contained"
-              sx={{
-                backgroundColor: "#FFB81C",
-                color: "white",
-                fontWeight: "bold",
-                borderRadius: 2,
-                mt: 2,
-                "&:hover": {
-                  backgroundColor: "#F0A500",
-                },
-              }}
-              onClick={() => handleStartPreparing(order.id)}
-            >
-               Iniciar Preparo
-            </Button>
-          )}
+        {status === "PENDING" && (
+          <Button
+            fullWidth
+            variant="contained"
+            sx={{
+              backgroundColor: "#FFB81C",
+              color: "white",
+              fontWeight: "bold",
+              borderRadius: 2,
+              mt: 2,
+              "&:hover": {
+                backgroundColor: "#F0A500",
+              },
+            }}
+            onClick={() => onUpdateStatus(order.id)}
+            disabled={isUpdating}
+          >
+            Iniciar Preparo
+          </Button>
+        )}
 
-          {order.status === "IN_PROGRESS" && (
-            <Button
-              fullWidth
-              variant="contained"
-              sx={{
-                backgroundColor: "#4CAF50",
-                color: "white",
-                fontWeight: "bold",
-                borderRadius: 2,
-                mt: 2,
-                "&:hover": {
-                  backgroundColor: "#45a049",
-                },
-              }}
-              onClick={() => handleMarkReady(order.id)}
-            >
-               Marcar como Pronto
-            </Button>
-          )}
+        {status === "IN_PROGRESS" && (
+          <Button
+            fullWidth
+            variant="contained"
+            sx={{
+              backgroundColor: "#4CAF50",
+              color: "white",
+              fontWeight: "bold",
+              borderRadius: 2,
+              mt: 2,
+              "&:hover": {
+                backgroundColor: "#45a049",
+              },
+            }}
+            onClick={() => onUpdateStatus(order.id)}
+            disabled={isUpdating}
+          >
+            Marcar como Pronto
+          </Button>
+        )}
 
-          {order.status === "READY" && (
-            <Box
-              sx={{
-                backgroundColor: "#4CAF50",
-                color: "white",
-                fontWeight: "bold",
-                borderRadius: 2,
-                mt: 2,
-                p: 1.3,
-                textAlign: "center",
-                animation: "pulse 2s infinite",
-                "@keyframes pulse": {
-                  "0%": {
-                    opacity: 1,
-                  },
-                  "50%": {
-                    opacity: 0.7,
-                  },
-                  "100%": {
-                    opacity: 1,
-                  },
-                },
-              }}
-            >
-               Pronto para Servir
-            </Box>
-          )}
-        </CardContent>
-      </Card>
-    );
-  };
+        {status === "READY" && (
+          <Box
+            sx={{
+              backgroundColor: "#4CAF50",
+              color: "white",
+              fontWeight: "bold",
+              borderRadius: 2,
+              mt: 2,
+              p: 1.3,
+              textAlign: "center",
+            }}
+          >
+            Pronto para Servir
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+export const KitchenPage = () => {
+  const queryClient = useQueryClient();
+  const { refreshCount } = useSocket();
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const ordersQuery = useQuery({
+    queryKey: ["kitchen-orders"],
+    queryFn: () => apiFetch<OrdersByStatus>("/api/orders/all"),
+  });
+
+  useEffect(() => {
+    if (refreshCount > 0) {
+      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    }
+  }, [refreshCount, queryClient]);
+
+  const updateStatus = useMutation({
+    mutationFn: (orderId: string) =>
+      apiFetch("/api/orders/update-status", {
+        method: "POST",
+        body: JSON.stringify({ orderId }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    },
+  });
+
+  const pendingOrders = useMemo(
+    () => ordersQuery.data?.PENDING ?? [],
+    [ordersQuery.data],
+  );
+  const inProgressOrders = useMemo(
+    () => ordersQuery.data?.IN_PROGRESS ?? [],
+    [ordersQuery.data],
+  );
+  const readyOrders = useMemo(
+    () => ordersQuery.data?.READY ?? [],
+    [ordersQuery.data],
+  );
+
+  // ⭐ MUDANÇA: Função para obter cores baseado no status
 
   return (
     <Box sx={{ p: 3, backgroundColor: "#F5F5F5", minHeight: "100vh" }}>
@@ -297,10 +298,35 @@ export const KitchenPage = () => {
         <Typography variant="h4" sx={{ fontWeight: "bold" }}>
           Visor da Cozinha
         </Typography>
-        <Typography variant="h5" sx={{ fontWeight: "bold" }}>
-          {currentTime.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-        </Typography>
+        <Box
+          sx={{
+            backgroundColor: "#ffffff",
+            borderRadius: 2,
+            px: 2,
+            py: 1,
+            boxShadow: "0 2px 8px 0 rgba(0,0,0,0.08)",
+          }}
+        >
+          <Typography variant="body2" sx={{ color: "#666", fontWeight: 600 }}>
+            Hora atual
+          </Typography>
+          <Typography variant="h5" sx={{ fontWeight: "bold" }}>
+            {currentTime.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+          </Typography>
+        </Box>
       </Box>
+
+      {ordersQuery.isLoading && (
+        <Typography sx={{ color: "#6B7280", mb: 2 }}>
+          Carregando pedidos...
+        </Typography>
+      )}
+
+      {ordersQuery.isError && (
+        <Typography sx={{ color: "#B91C1C", mb: 2 }}>
+          Erro ao carregar pedidos.
+        </Typography>
+      )}
 
       {/* NEW ORDERS */}
       <Typography
@@ -314,7 +340,7 @@ export const KitchenPage = () => {
           gap: 1,
         }}
       >
-         NOVOS PEDIDOS ({newOrders.length})
+        NOVOS PEDIDOS ({pendingOrders.length})
       </Typography>
       <Box
         display="grid"
@@ -327,8 +353,15 @@ export const KitchenPage = () => {
         gap={2}
         mb={4}
       >
-        {newOrders.map((order) => (
-          <OrderCard key={order.id} order={order} />
+        {pendingOrders.map((order) => (
+          <OrderCard
+            key={order.id}
+            order={order}
+            status="PENDING"
+            currentTime={currentTime}
+            onUpdateStatus={(orderId) => updateStatus.mutate(orderId)}
+            isUpdating={updateStatus.isPending}
+          />
         ))}
       </Box>
 
@@ -344,7 +377,7 @@ export const KitchenPage = () => {
           gap: 1,
         }}
       >
-         EM PREPARO ({inProgressOrders.length})
+        EM PREPARO ({inProgressOrders.length})
       </Typography>
       <Box
         display="grid"
@@ -358,7 +391,14 @@ export const KitchenPage = () => {
         mb={4}
       >
         {inProgressOrders.map((order) => (
-          <OrderCard key={order.id} order={order} />
+          <OrderCard
+            key={order.id}
+            order={order}
+            status="IN_PROGRESS"
+            currentTime={currentTime}
+            onUpdateStatus={(orderId) => updateStatus.mutate(orderId)}
+            isUpdating={updateStatus.isPending}
+          />
         ))}
       </Box>
 
@@ -374,7 +414,7 @@ export const KitchenPage = () => {
           gap: 1,
         }}
       >
-         PRONTO ({readyOrders.length})
+        PRONTO ({readyOrders.length})
       </Typography>
       <Box
         display="grid"
@@ -387,7 +427,14 @@ export const KitchenPage = () => {
         gap={2}
       >
         {readyOrders.map((order) => (
-          <OrderCard key={order.id} order={order} />
+          <OrderCard
+            key={order.id}
+            order={order}
+            status="READY"
+            currentTime={currentTime}
+            onUpdateStatus={(orderId) => updateStatus.mutate(orderId)}
+            isUpdating={updateStatus.isPending}
+          />
         ))}
       </Box>
     </Box>

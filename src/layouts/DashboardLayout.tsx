@@ -2,6 +2,19 @@ import { AppBar, Box, Button, Toolbar, Typography } from "@mui/material";
 import { Outlet, useNavigate } from "react-router-dom";
 import { UseAuth } from "../auth/AuthContext";
 
+const translateRole = (role?: string) => {
+  switch (role) {
+    case "WAITER":
+      return "Garçom";
+    case "KITCHEN":
+      return "Cozinha";
+    case "CASHIER":
+      return "Caixa";
+    default:
+      return "";
+  }
+};
+
 export const DashboardLayout = () => {
   const navigate = useNavigate();
   const { role, logout } = UseAuth();
@@ -11,7 +24,7 @@ export const DashboardLayout = () => {
       <AppBar position="static">
         <Toolbar>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            PlateOps — {role ?? ""}
+            PlateOps — {translateRole(role ?? "")}
           </Typography>
           <Button
             color="inherit"

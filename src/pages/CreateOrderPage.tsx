@@ -1,54 +1,102 @@
-import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../api/client";
+import { UseAuth } from "../auth/AuthContext";
 
-type Categoria = "Todos" | "Entradas" | "Pratos Principais" | "Sobremesas" | "Bebidas";
+type Categoria = "Todos" | string;
 
 type ItemMenu = {
-  id: number;
+  id: string;
   nome: string;
   preco: number;
   categoria: Categoria;
 };
 
 type PedidoAgrupado = {
-  [id: number]: {
+  [id: string]: {
     item: ItemMenu;
     qtd: number;
     notes: string;
   };
 };
 
-const menu: ItemMenu[] = [
-  { id: 1, nome: "Caesar Salad", preco: 12.99, categoria: "Entradas" },
-  { id: 2, nome: "Bruschetta", preco: 10.99, categoria: "Entradas" },
-  { id: 3, nome: "Calamari", preco: 14.99, categoria: "Entradas" },
-  { id: 4, nome: "Sopa do Dia", preco: 8.99, categoria: "Entradas" },
-  { id: 5, nome: "Salmão Grelhado", preco: 26.99, categoria: "Pratos Principais" },
-  { id: 6, nome: "Ribeye Steak", preco: 32.99, categoria: "Pratos Principais" },
-  { id: 7, nome: "Frango à Parmegiana", preco: 22.99, categoria: "Pratos Principais" },
-  { id: 8, nome: "Pasta Carbonara", preco: 18.99, categoria: "Pratos Principais" },
-  { id: 9, nome: "Pizza Margherita", preco: 15.99, categoria: "Pratos Principais" },
-  { id: 10, nome: "Tiramisu", preco: 8.99, categoria: "Sobremesas" },
-  { id: 11, nome: "Cheesecake", preco: 8.99, categoria: "Sobremesas" },
-  { id: 12, nome: "Refrigerante", preco: 3.99, categoria: "Bebidas" }
-];
+type ApiItem = {
+  id: string;
+  name: string;
+  price: string;
+};
 
-const categoriaPT = {
-  "Todos": "Todos",
-  "Entradas": "Entradas",
-  "Pratos Principais": "Pratos Principais",
-  "Sobremesas": "Sobremesas",
-  "Bebidas": "Bebidas"
+type ApiItensResponse = Record<string, ApiItem[]>;
+
+const buildItens = (data: ApiItensResponse | undefined): ItemMenu[] => {
+  if (!data) return [];
+  return Object.entries(data).flatMap(([categoria, itens]) =>
+    itens.map((item) => ({
+      id: item.id,
+      nome: item.name,
+      preco: Number(item.price),
+      categoria,
+    })),
+  );
 };
 
 export default function CreateOrderPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const mesaId = id ? parseInt(id, 10) : 0;
+  const location = useLocation();
+  const { userId } = UseAuth();
+  const mesaId = id ?? "";
+  const mesaNumero = (location.state as { tableNumber?: number } | null)?.tableNumber;
 
   const [categoria, setCategoria] = useState<Categoria>("Todos");
   // pedido: { [id]: { item, qtd, notes } }
   const [pedido, setPedido] = useState<PedidoAgrupado>({});
+
+  const itensQuery = useQuery({
+    queryKey: ["menu-itens"],
+    queryFn: () => apiFetch<ApiItensResponse>("/api/itens"),
+  });
+
+  const itensMenu = useMemo(() => buildItens(itensQuery.data), [itensQuery.data]);
+
+  const categoriasDisponiveis = useMemo(() => {
+    const categorias = new Set<Categoria>();
+    itensMenu.forEach((item) => categorias.add(item.categoria));
+    return ["Todos" as Categoria, ...Array.from(categorias)];
+  }, [itensMenu]);
+
+  const criarPedido = useMutation({
+    mutationFn: async () => {
+      if (!mesaId || !userId) {
+        throw new Error("Mesa ou usuário inválido.");
+      }
+
+      const items = Object.values(pedido).map(({ item, qtd }) => ({
+        menuItemId: item.id,
+        quantity: qtd,
+      }));
+
+      const notes = Object.values(pedido)
+        .map(({ item, notes }) => (notes ? `${item.nome}: ${notes}` : ""))
+        .filter(Boolean)
+        .join(" | ");
+
+      return apiFetch("/api/orders/create", {
+        method: "POST",
+        body: JSON.stringify({
+          tableId: mesaId,
+          waiterId: userId,
+          notes: notes || undefined,
+          items,
+        }),
+      });
+    },
+    onSuccess: () => {
+      setPedido({});
+      navigate("/dashboard/waiter");
+    },
+  });
 
   function adicionarItem(item: ItemMenu) {
     setPedido(prev => ({
@@ -62,12 +110,13 @@ export default function CreateOrderPage() {
     }));
   }
 
-  function removerItem(itemId: number) {
+  function removerItem(itemId: string) {
     setPedido(prev => {
       if (!prev[itemId]) return prev;
       if (prev[itemId].qtd <= 1) {
-        const { [itemId]: _, ...rest } = prev;
-        return rest;
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
       }
       return {
         ...prev,
@@ -79,7 +128,7 @@ export default function CreateOrderPage() {
     });
   }
 
-  function atualizarNotas(itemId: number, notes: string) {
+  function atualizarNotas(itemId: string, notes: string) {
     setPedido(prev => ({
       ...prev,
       [itemId]: {
@@ -90,14 +139,13 @@ export default function CreateOrderPage() {
   }
 
   function finalizarPedido() {
-    alert(`Pedido da mesa ${mesaId} enviado para a cozinha!`);
-    navigate("/dashboard/waiter");
+    criarPedido.mutate();
   }
 
   const itensFiltrados =
     categoria === "Todos"
-      ? menu
-      : menu.filter(item => item.categoria === categoria);
+      ? itensMenu
+      : itensMenu.filter(item => item.categoria === categoria);
 
   const total = Object.values(pedido).reduce(
     (sum, { item, qtd }) => sum + item.preco * qtd,
@@ -128,7 +176,9 @@ export default function CreateOrderPage() {
             ← Voltar para Mesas
           </button>
           <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#222" }}>Mesa {mesaId}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#222" }}>
+              Mesa {mesaNumero ?? mesaId}
+            </div>
             <div style={{ fontSize: 15, color: "#888", marginTop: 2 }}>Criar Pedido</div>
           </div>
         </div>
@@ -142,7 +192,7 @@ export default function CreateOrderPage() {
           marginLeft: "auto",
           marginRight: "auto"
         }}>
-          {(["Todos", "Entradas", "Pratos Principais", "Sobremesas", "Bebidas"] as Categoria[]).map(cat => (
+          {categoriasDisponiveis.map(cat => (
             <button
               key={cat}
               onClick={() => setCategoria(cat)}
@@ -159,7 +209,7 @@ export default function CreateOrderPage() {
                 transition: "all 0.15s"
               }}
             >
-              {categoriaPT[cat]}
+              {cat}
             </button>
           ))}
         </div>
@@ -179,6 +229,24 @@ export default function CreateOrderPage() {
             gridTemplateColumns: "repeat(2, 1fr)",
             gap: 24
           }}>
+            {itensQuery.isLoading && (
+              <div style={{ color: "#6B7280", fontSize: 16 }}>
+                Carregando itens...
+              </div>
+            )}
+
+            {itensQuery.isError && (
+              <div style={{ color: "#B91C1C", fontSize: 16 }}>
+                Erro ao carregar itens.
+              </div>
+            )}
+
+            {!itensQuery.isLoading && !itensQuery.isError && itensFiltrados.length === 0 && (
+              <div style={{ color: "#6B7280", fontSize: 16 }}>
+                Nenhum item encontrado.
+              </div>
+            )}
+
             {itensFiltrados.map(item => (
               <div
                 key={item.id}
@@ -198,7 +266,7 @@ export default function CreateOrderPage() {
                   {item.nome}
                 </div>
                 <div style={{ color: "#888", fontSize: 15, marginBottom: 8 }}>
-                  {categoriaPT[item.categoria]}
+                  {item.categoria}
                 </div>
                 <div style={{ color: "#2563EB", fontWeight: 700, fontSize: 20 }}>
                   R$ {item.preco.toFixed(2)}
@@ -310,6 +378,7 @@ export default function CreateOrderPage() {
                 </div>
                 <button
                   onClick={finalizarPedido}
+                  disabled={criarPedido.isPending || !userId}
                   style={{
                     marginTop: 10,
                     width: "100%",
@@ -324,8 +393,20 @@ export default function CreateOrderPage() {
                     boxShadow: "0 2px 8px 0 #22c55e22"
                   }}
                 >
-                  Enviar para a Cozinha
+                  {criarPedido.isPending ? "Enviando..." : "Enviar para a Cozinha"}
                 </button>
+                {!userId && (
+                  <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
+                    Usuário não autenticado.
+                  </div>
+                )}
+                {criarPedido.isError && (
+                  <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
+                    {criarPedido.error instanceof Error
+                      ? criarPedido.error.message
+                      : "Erro ao enviar pedido."}
+                  </div>
+                )}
               </>
             )}
           </div>

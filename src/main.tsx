@@ -7,6 +7,7 @@ import "./index.css";
 import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 import { theme } from "./theme";
+import { SocketProvider } from "./socket/SocketProvider";
 
 const queryClient = new QueryClient();
 
@@ -16,9 +17,11 @@ createRoot(document.getElementById("root")!).render(
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <AuthProvider>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
+          <SocketProvider>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </SocketProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

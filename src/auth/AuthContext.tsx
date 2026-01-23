@@ -5,47 +5,35 @@ import {
   useMemo,
   useState,
 } from "react";
-
-type UserRole = "WAITER" | "KITCHEN" | "CASHIER";
-
-type AuthState = {
-  token: string | null;
-  role: UserRole | null;
-};
+import {
+  clearStoredAuth,
+  readStoredAuth,
+  writeStoredAuth,
+  type AuthState,
+  type UserRole,
+} from "./authStorage";
 
 type AuthContextValue = AuthState & {
-  login: (token: string, role: UserRole) => void;
+  login: (token: string, role: UserRole, userId: string) => void;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-
-const storageKey = "plateops.auth";
-
-const readStoredAuth = (): AuthState => {
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return { token: null, role: null };
-    return JSON.parse(raw) as AuthState;
-  } catch {
-    return { token: null, role: null };
-  }
-};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [state, setState] = useState<AuthState>(() => readStoredAuth());
 
-  const login = useCallback((token: string, role: UserRole) => {
-    const next = { token, role };
+  const login = useCallback((token: string, role: UserRole, userId: string) => {
+    const next = { token, role, userId };
     setState(next);
-    localStorage.setItem(storageKey, JSON.stringify(next));
+    writeStoredAuth(next);
   }, []);
 
   const logout = useCallback(() => {
-    setState({ token: null, role: null });
-    localStorage.removeItem(storageKey);
+    setState({ token: null, role: null, userId: null });
+    clearStoredAuth();
   }, []);
 
   const value = useMemo(

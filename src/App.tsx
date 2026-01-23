@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { DashboardLayout } from "./layouts/DashboardLayout";
 import { RequireRole } from "./routes/RequireRole";
 import { CashierPage } from "./pages/CashierPage";
@@ -7,11 +7,12 @@ import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { UnauthorizedPage } from "./pages/UnauthorizedPage";
 import { WaiterPage } from "./pages/WaiterPage";
-import CreateOrderPage from "./pages/CreateOrderPage"; // <-- IMPORTANTE
+import CreateOrderPage from "./pages/CreateOrderPage";
 
 const App = () => {
   return (
     <Routes>
+      <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
@@ -24,7 +25,6 @@ const App = () => {
             </RequireRole>
           }
         />
-        {/* ROTA CORRETA PARA CRIAR PEDIDO */}
         <Route
           path="/create-order/:id"
           element={
