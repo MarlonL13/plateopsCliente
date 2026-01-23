@@ -7,6 +7,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { UnauthorizedPage } from "./pages/UnauthorizedPage";
 import { WaiterPage } from "./pages/WaiterPage";
+import CreateOrderPage from "./pages/CreateOrderPage"; // <-- IMPORTANTE
 
 const App = () => {
   return (
@@ -20,6 +21,15 @@ const App = () => {
           element={
             <RequireRole allowed={["WAITER"]}>
               <WaiterPage />
+            </RequireRole>
+          }
+        />
+        {/* ROTA CORRETA PARA CRIAR PEDIDO */}
+        <Route
+          path="/create-order/:id"
+          element={
+            <RequireRole allowed={["WAITER"]}>
+              <CreateOrderPage />
             </RequireRole>
           }
         />
