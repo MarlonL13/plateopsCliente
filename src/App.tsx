@@ -4,10 +4,10 @@ import { RequireRole } from "./routes/RequireRole";
 import { CashierPage } from "./pages/CashierPage";
 import { KitchenPage } from "./pages/KitchenPage";
 import { LoginPage } from "./pages/LoginPage";
-import { NotFoundPage } from "./pages/NotFoundPage";
 import { UnauthorizedPage } from "./pages/UnauthorizedPage";
 import { WaiterPage } from "./pages/WaiterPage";
 import CreateOrderPage from "./pages/CreateOrderPage";
+import PaymentPage from "./pages/PaymentPage";
 
 const App = () => {
   return (
@@ -41,6 +41,7 @@ const App = () => {
             </RequireRole>
           }
         />
+        {/* Rota para a tela de seleção de mesas do caixa */}
         <Route
           path="/dashboard/cashier"
           element={
@@ -49,9 +50,18 @@ const App = () => {
             </RequireRole>
           }
         />
+        {/* Rota para a tela de pagamento do caixa */}
+        <Route
+          path="/payment/:id"
+          element={
+            <RequireRole allowed={["CASHIER"]}>
+              <PaymentPage />
+            </RequireRole>
+          }
+        />
       </Route>
 
-      <Route path="*" element={<NotFoundPage />} />
+      <Route path="*" element={<LoginPage />} />
     </Routes>
   );
 };
