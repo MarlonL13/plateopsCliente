@@ -4,8 +4,80 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { useSocket } from "../socket";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import { Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from "@mui/material";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
-type PaymentMethod = "DEBIT" | "CREDIT" | "CASH";
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+
+type PaymentMethod = "ONLINE" | "CASH";
+
+const CheckoutForm = ({
+  onPaymentSuccess,
+  tableTotal,
+}: {
+  onPaymentSuccess: () => void;
+  tableTotal: number;
+}) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+
+    setIsProcessing(true);
+    setErrorMessage("");
+
+    const { error, paymentIntent } = await stripe.confirmPayment({
+      elements,
+      redirect: "if_required", // Prevent automatic redirect to allow calling the backend success route
+    });
+
+    if (error) {
+      setErrorMessage(error.message ?? "Erro no pagamento online.");
+    } else if (paymentIntent && paymentIntent.status === "succeeded") {
+      onPaymentSuccess();
+    }
+
+    setIsProcessing(false);
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <PaymentElement />
+      {errorMessage && (
+        <div style={{ color: "red", marginTop: 12, fontSize: 14 }}>
+          {errorMessage}
+        </div>
+      )}
+      <button
+        disabled={isProcessing || !stripe || !elements}
+        style={{
+          width: "100%",
+          padding: "16px",
+          marginTop: 24,
+          borderRadius: 12,
+          background: isProcessing ? "#9CA3AF" : "#16A34A",
+          color: "#fff",
+          border: "none",
+          fontSize: 16,
+          fontWeight: 700,
+          cursor: isProcessing ? "not-allowed" : "pointer",
+          boxShadow: isProcessing
+            ? "none"
+            : "0 4px 6px -1px rgba(22, 163, 74, 0.4)",
+          transition: "all 0.2s",
+        }}
+      >
+        {isProcessing ? "Processando..." : `Confirmar Pgt. (R$ ${tableTotal.toFixed(2)})`}
+      </button>
+    </form>
+  );
+};
+
 
 type CartItem = {
   id: string;
@@ -38,6 +110,8 @@ const PaymentPage: React.FC = () => {
   const { refreshCount } = useSocket();
 
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
+  const [clientSecret, setClientSecret] = useState<string>("");
+  const [confirmCashOpen, setConfirmCashOpen] = useState(false);
 
   useEffect(() => {
     if (refreshCount > 0) {
@@ -55,6 +129,24 @@ const PaymentPage: React.FC = () => {
       }),
     enabled: !isNaN(tableNumber),
   });
+
+  // Fetch the Stripe PaymentIntent clientSecret when ONLINE is selected.
+  // This hook must run before any early returns so hook order is stable.
+  useEffect(() => {
+    if (selectedMethod === "ONLINE" && !clientSecret && data?.tableTotal && data.tableTotal > 0) {
+      apiFetch<{ clientSecret: string }>("/api/payments/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: data.tableTotal,
+          tableNumber,
+          currency: "brl",
+        }),
+      })
+        .then((res) => setClientSecret(res.clientSecret))
+        .catch((err) => console.error("Erro ao gerar payment intent", err));
+    }
+  }, [selectedMethod, clientSecret, data?.tableTotal, tableNumber]);
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -94,16 +186,29 @@ const PaymentPage: React.FC = () => {
     );
   }
 
-  const { orders, tableTotal } = data;
+  // Safe read of data for rendering (data may be undefined during loading)
+  const orders = data?.orders ?? [];
+  const tableTotal = data?.tableTotal ?? 0;
 
   const handlePay = () => {
     if (!selectedMethod) {
       alert("Selecione um método de pagamento.");
       return;
     }
-    if (confirm(`Confirmar pagamento de R$ ${tableTotal.toFixed(2)}?`)) {
-      payMutation.mutate();
+    
+    // For CASH, open the Material UI modal instead of using window.confirm
+    if (selectedMethod === "CASH") {
+      setConfirmCashOpen(true);
     }
+  };
+
+  const handleConfirmCash = () => {
+    setConfirmCashOpen(false);
+    payMutation.mutate();
+  };
+
+  const handleCancelCash = () => {
+    setConfirmCashOpen(false);
   };
 
   return (
@@ -265,24 +370,27 @@ const PaymentPage: React.FC = () => {
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: "#374151" }}>
                 Método de Pagamento
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                {(["DEBIT", "CREDIT", "CASH"] as PaymentMethod[]).map((method) => {
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {(["ONLINE", "CASH"] as PaymentMethod[]).map((method) => {
                   const isActive = selectedMethod === method;
-                  const labels = { DEBIT: "Débito", CREDIT: "Crédito", CASH: "Dinheiro" };
+                  const labels = { ONLINE: "Cartão / Pix", CASH: "Dinheiro" };
                   return (
                     <button
                       key={method}
                       onClick={() => setSelectedMethod(method)}
                       style={{
-                        padding: "12px 4px",
-                        borderRadius: 8,
+                        padding: "16px 8px",
+                        borderRadius: 12,
                         border: isActive ? "2px solid #2563EB" : "1px solid #E5E7EB",
                         background: isActive ? "#EFF6FF" : "#fff",
                         color: isActive ? "#2563EB" : "#4B5563",
                         fontWeight: 600,
-                        fontSize: 13,
+                        fontSize: 14,
                         cursor: "pointer",
-                        transition: "all 0.2s"
+                        transition: "all 0.2s",
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center"
                       }}
                     >
                       {labels[method]}
@@ -292,28 +400,78 @@ const PaymentPage: React.FC = () => {
               </div>
             </div>
 
-            <button
-              onClick={handlePay}
-              disabled={payMutation.isPending || !selectedMethod}
-              style={{
-                width: "100%",
-                padding: "16px",
-                borderRadius: 12,
-                background: !selectedMethod || payMutation.isPending ? "#9CA3AF" : "#16A34A",
-                color: "#fff",
-                border: "none",
-                fontSize: 16,
-                fontWeight: 700,
-                cursor: !selectedMethod || payMutation.isPending ? "not-allowed" : "pointer",
-                boxShadow: !selectedMethod ? "none" : "0 4px 6px -1px rgba(22, 163, 74, 0.4)",
-                transition: "all 0.2s"
-              }}
-            >
-              {payMutation.isPending ? "Processando..." : "Confirmar Pagamento"}
-            </button>
+            {selectedMethod === "ONLINE" && clientSecret && (
+              <div style={{ marginTop: 24 }}>
+                <Elements stripe={stripePromise} options={{ clientSecret }}>
+                  <CheckoutForm
+                    tableTotal={tableTotal}
+                    onPaymentSuccess={() => payMutation.mutate()}
+                  />
+                </Elements>
+              </div>
+            )}
+
+            {selectedMethod !== "ONLINE" && (
+              <button
+                onClick={handlePay}
+                disabled={payMutation.isPending || !selectedMethod}
+                style={{
+                  width: "100%",
+                  padding: "16px",
+                  borderRadius: 12,
+                  background: !selectedMethod || payMutation.isPending ? "#9CA3AF" : "#16A34A",
+                  color: "#fff",
+                  border: "none",
+                  fontSize: 16,
+                  fontWeight: 700,
+                  cursor: !selectedMethod || payMutation.isPending ? "not-allowed" : "pointer",
+                  boxShadow: !selectedMethod ? "none" : "0 4px 6px -1px rgba(22, 163, 74, 0.4)",
+                  transition: "all 0.2s"
+                }}
+              >
+                {payMutation.isPending ? "Processando..." : "Confirmar Pagamento em Dinheiro"}
+              </button>
+            )}
           </div>
         </div>
       </div>
+
+      <Dialog
+        open={confirmCashOpen}
+        onClose={handleCancelCash}
+        aria-labelledby="alert-dialog-title"
+        aria-describedby="alert-dialog-description"
+        PaperProps={{
+          style: { borderRadius: 12, padding: "8px" }
+        }}
+      >
+        <DialogTitle id="alert-dialog-title" sx={{ fontWeight: 700, pb: 1 }}>
+          {"Confirmar Pagamento"}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText id="alert-dialog-description" sx={{ color: "#374151" }}>
+            Você está prestes a registrar o pagamento em <strong>dinheiro/espécie</strong> no valor total de <strong style={{color: "#111827"}}>R$ {tableTotal.toFixed(2)}</strong>.
+            <br/><br/>
+            Deseja confirmar e finalizar a conta da Mesa {tableNumber}?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button 
+            onClick={handleCancelCash} 
+            sx={{ color: "#6B7280", fontWeight: 600, textTransform: "none" }}
+          >
+            Cancelar
+          </Button>
+          <Button 
+            onClick={handleConfirmCash} 
+            variant="contained" 
+            sx={{ background: "#16A34A", "&:hover": { background: "#15803D" }, fontWeight: 600, textTransform: "none", borderRadius: 2 }}
+            autoFocus
+          >
+            Confirmar Pagamento
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 };
