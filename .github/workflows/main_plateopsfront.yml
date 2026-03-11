@@ -35,6 +35,8 @@ jobs:
 
       - name: Build Vite app
         run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Package dist for deployment
         run: |
