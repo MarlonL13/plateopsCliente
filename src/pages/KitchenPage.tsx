@@ -1,4 +1,15 @@
-import { Badge, Box, Button, Card, CardContent, Typography } from "@mui/material";
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  FormControlLabel,
+  Switch,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -61,6 +72,26 @@ const getElapsedTime = (currentTime: Date, createdAt: string): string => {
   return `${Math.floor(diff / 3600)}h`;
 };
 
+const getElapsedMinutes = (currentTime: Date, createdAt: string) => {
+  const created = new Date(createdAt);
+  return Math.floor((currentTime.getTime() - created.getTime()) / 60000);
+};
+
+const isOrderOverdue = (
+  status: OrderStatus,
+  currentTime: Date,
+  createdAt: string,
+) => {
+  const minutes = getElapsedMinutes(currentTime, createdAt);
+  if (status === "PENDING") {
+    return minutes >= 12;
+  }
+  if (status === "IN_PROGRESS") {
+    return minutes >= 20;
+  }
+  return false;
+};
+
 const OrderCard = ({
   order,
   status,
@@ -75,6 +106,7 @@ const OrderCard = ({
   isUpdating: boolean;
 }) => {
   const cardStyles = getCardStyles(status);
+  const isOverdue = isOrderOverdue(status, currentTime, order.createdAt);
   const itemsRef = useRef<HTMLDivElement | null>(null);
   const scrollTopRef = useRef(0);
 
@@ -93,6 +125,7 @@ const OrderCard = ({
         minWidth: 300,
         maxWidth: 350,
         fontWeight: "bold",
+        boxShadow: isOverdue ? "0 0 0 2px #DC2626 inset" : "none",
       }}
     >
       <CardContent sx={{ pb: 2 }}>
@@ -124,6 +157,14 @@ const OrderCard = ({
             <AccessTimeIcon /> {getElapsedTime(currentTime, order.createdAt)}
           </Typography>
         </Box>
+
+        {isOverdue && (
+          <Chip
+            label="Atrasado"
+            size="small"
+            sx={{ mb: 1.2, background: "#FEE2E2", color: "#991B1B", fontWeight: 700 }}
+          />
+        )}
 
         <Box
           ref={itemsRef}
@@ -246,6 +287,10 @@ export const KitchenPage = () => {
   const queryClient = useQueryClient();
   const { refreshCount } = useSocket();
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [tableSearch, setTableSearch] = useState("");
+  const [showOnlyOverdue, setShowOnlyOverdue] = useState(false);
+  const [soundAlerts, setSoundAlerts] = useState(true);
+  const lastOverdueCountRef = useRef(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -277,6 +322,21 @@ export const KitchenPage = () => {
     },
   });
 
+  const bulkUpdateStatus = useMutation({
+    mutationFn: (orderIds: string[]) =>
+      Promise.all(
+        orderIds.map((orderId) =>
+          apiFetch("/api/orders/update-status", {
+            method: "POST",
+            body: JSON.stringify({ orderId }),
+          }),
+        ),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    },
+  });
+
   const pendingOrders = useMemo(
     () => ordersQuery.data?.PENDING ?? [],
     [ordersQuery.data],
@@ -289,6 +349,70 @@ export const KitchenPage = () => {
     () => ordersQuery.data?.READY ?? [],
     [ordersQuery.data],
   );
+
+  const filterAndSortOrders = useMemo(() => {
+    const tableFilter = tableSearch.trim();
+
+    const process = (orders: OrderApi[], status: OrderStatus) => {
+      return orders
+        .filter((order) => {
+          const tableMatch = String(order.table.number).includes(tableFilter);
+          const overdueMatch =
+            !showOnlyOverdue || isOrderOverdue(status, currentTime, order.createdAt);
+          return tableMatch && overdueMatch;
+        })
+        .sort(
+          (a, b) =>
+            getElapsedMinutes(currentTime, b.createdAt) -
+            getElapsedMinutes(currentTime, a.createdAt),
+        );
+    };
+
+    return {
+      pending: process(pendingOrders, "PENDING"),
+      inProgress: process(inProgressOrders, "IN_PROGRESS"),
+      ready: process(readyOrders, "READY"),
+    };
+  }, [
+    tableSearch,
+    showOnlyOverdue,
+    currentTime,
+    pendingOrders,
+    inProgressOrders,
+    readyOrders,
+  ]);
+
+  const overdueCount = useMemo(() => {
+    return pendingOrders.filter((order) => isOrderOverdue("PENDING", currentTime, order.createdAt))
+      .length +
+      inProgressOrders.filter((order) =>
+        isOrderOverdue("IN_PROGRESS", currentTime, order.createdAt),
+      ).length;
+  }, [pendingOrders, inProgressOrders, currentTime]);
+
+  useEffect(() => {
+    if (soundAlerts && overdueCount > lastOverdueCountRef.current) {
+      try {
+        const audioContext = new window.AudioContext();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.type = "triangle";
+        oscillator.frequency.value = 880;
+        gainNode.gain.value = 0.08;
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.14);
+      } catch {
+        console.warn("Audio alert unavailable in this browser context");
+      }
+    }
+
+    lastOverdueCountRef.current = overdueCount;
+  }, [overdueCount, soundAlerts]);
 
   // ⭐ MUDANÇA: Função para obter cores baseado no status
 
@@ -316,6 +440,44 @@ export const KitchenPage = () => {
         </Box>
       </Box>
 
+      <Box
+        display="flex"
+        flexWrap="wrap"
+        gap={1.5}
+        alignItems="center"
+        mb={2}
+      >
+        <Chip label={`Total: ${pendingOrders.length + inProgressOrders.length + readyOrders.length}`} />
+        <Chip label={`Atrasados: ${overdueCount}`} color={overdueCount > 0 ? "error" : "default"} />
+        <TextField
+          size="small"
+          value={tableSearch}
+          onChange={(event) => setTableSearch(event.target.value)}
+          placeholder="Filtrar mesa"
+          sx={{ minWidth: 180, backgroundColor: "#fff", borderRadius: 1 }}
+        />
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={showOnlyOverdue}
+              onChange={(event) => setShowOnlyOverdue(event.target.checked)}
+            />
+          }
+          label="Somente atrasados"
+        />
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={soundAlerts}
+              onChange={(event) => setSoundAlerts(event.target.checked)}
+            />
+          }
+          label="Som alerta"
+        />
+      </Box>
+
       {ordersQuery.isLoading && (
         <Typography sx={{ color: "#6B7280", mb: 2 }}>
           Carregando pedidos...
@@ -329,19 +491,34 @@ export const KitchenPage = () => {
       )}
 
       {/* NEW ORDERS */}
-      <Typography
-        variant="h6"
-        sx={{
-          color: "#FF6B6B",
-          fontWeight: "bold",
-          mb: 2,
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-        }}
-      >
-        NOVOS PEDIDOS ({pendingOrders.length})
-      </Typography>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+        <Typography
+          variant="h6"
+          sx={{
+            color: "#FF6B6B",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
+          NOVOS PEDIDOS ({filterAndSortOrders.pending.length})
+        </Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={
+            filterAndSortOrders.pending.length === 0 ||
+            updateStatus.isPending ||
+            bulkUpdateStatus.isPending
+          }
+          onClick={() =>
+            bulkUpdateStatus.mutate(filterAndSortOrders.pending.map((order) => order.id))
+          }
+        >
+          Iniciar todos
+        </Button>
+      </Box>
       <Box
         display="grid"
         gridTemplateColumns={{
@@ -353,7 +530,7 @@ export const KitchenPage = () => {
         gap={2}
         mb={4}
       >
-        {pendingOrders.map((order) => (
+        {filterAndSortOrders.pending.map((order) => (
           <OrderCard
             key={order.id}
             order={order}
@@ -366,19 +543,34 @@ export const KitchenPage = () => {
       </Box>
 
       {/* IN PROGRESS ORDERS */}
-      <Typography
-        variant="h6"
-        sx={{
-          color: "#FFB81C",
-          fontWeight: "bold",
-          mb: 2,
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-        }}
-      >
-        EM PREPARO ({inProgressOrders.length})
-      </Typography>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+        <Typography
+          variant="h6"
+          sx={{
+            color: "#FFB81C",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
+          EM PREPARO ({filterAndSortOrders.inProgress.length})
+        </Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={
+            filterAndSortOrders.inProgress.length === 0 ||
+            updateStatus.isPending ||
+            bulkUpdateStatus.isPending
+          }
+          onClick={() =>
+            bulkUpdateStatus.mutate(filterAndSortOrders.inProgress.map((order) => order.id))
+          }
+        >
+          Marcar todos prontos
+        </Button>
+      </Box>
       <Box
         display="grid"
         gridTemplateColumns={{
@@ -390,7 +582,7 @@ export const KitchenPage = () => {
         gap={2}
         mb={4}
       >
-        {inProgressOrders.map((order) => (
+        {filterAndSortOrders.inProgress.map((order) => (
           <OrderCard
             key={order.id}
             order={order}
@@ -414,7 +606,7 @@ export const KitchenPage = () => {
           gap: 1,
         }}
       >
-        PRONTO ({readyOrders.length})
+        PRONTO ({filterAndSortOrders.ready.length})
       </Typography>
       <Box
         display="grid"
@@ -426,7 +618,7 @@ export const KitchenPage = () => {
         }}
         gap={2}
       >
-        {readyOrders.map((order) => (
+        {filterAndSortOrders.ready.map((order) => (
           <OrderCard
             key={order.id}
             order={order}

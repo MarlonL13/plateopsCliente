@@ -8,6 +8,7 @@ import { UnauthorizedPage } from "./pages/UnauthorizedPage";
 import { WaiterPage } from "./pages/WaiterPage";
 import CreateOrderPage from "./pages/CreateOrderPage";
 import PaymentPage from "./pages/PaymentPage";
+import InsightsPage from "./pages/InsightsPage";
 
 const App = () => {
   return (
@@ -56,6 +57,14 @@ const App = () => {
           element={
             <RequireRole allowed={["CASHIER"]}>
               <PaymentPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/dashboard/insights"
+          element={
+            <RequireRole allowed={["WAITER", "KITCHEN", "CASHIER"]}>
+              <InsightsPage />
             </RequireRole>
           }
         />

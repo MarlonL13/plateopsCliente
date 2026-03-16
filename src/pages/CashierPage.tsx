@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
@@ -73,6 +73,8 @@ export function CashierPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { refreshCount } = useSocket();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusMesa | "Todos">("Todos");
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["cashier-tables"],
@@ -94,6 +96,29 @@ export function CashierPage() {
     }));
   }, [data]);
 
+  const filteredMesas = useMemo(() => {
+    return mesas.filter((mesa) => {
+      const matchesSearch = String(mesa.id).includes(search.trim());
+      const matchesStatus = statusFilter === "Todos" || mesa.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [mesas, search, statusFilter]);
+
+  const totals = useMemo(() => {
+    return mesas.reduce(
+      (acc, mesa) => {
+        acc.tables += 1;
+        acc.items += mesa.itemCount;
+        acc.revenue += mesa.totalValue;
+        if (mesa.status !== "Vazia") {
+          acc.openTables += 1;
+        }
+        return acc;
+      },
+      { tables: 0, openTables: 0, items: 0, revenue: 0 },
+    );
+  }, [mesas]);
+
   const handleSelecionarMesa = (mesa: Mesa) => {
     navigate(`/payment/${mesa.id}`);
   };
@@ -104,6 +129,73 @@ export function CashierPage() {
         <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>Selecionar Mesa para Pagamento</h1>
         <div style={{ color: "#6B7280", fontSize: 18, marginBottom: 32 }}>
           Escolha uma mesa para realizar o pagamento
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #E5E7EB" }}>
+            <div style={{ fontSize: 12, color: "#6B7280" }}>Mesas Totais</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{totals.tables}</div>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #E5E7EB" }}>
+            <div style={{ fontSize: 12, color: "#6B7280" }}>Mesas Ativas</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{totals.openTables}</div>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #E5E7EB" }}>
+            <div style={{ fontSize: 12, color: "#6B7280" }}>Itens em aberto</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{totals.items}</div>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #E5E7EB" }}>
+            <div style={{ fontSize: 12, color: "#6B7280" }}>Total aberto</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>R$ {totals.revenue.toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            marginBottom: 24,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Buscar mesa por número"
+            style={{
+              background: "#fff",
+              border: "1px solid #E5E7EB",
+              borderRadius: 10,
+              padding: "10px 12px",
+              minWidth: 220,
+              fontSize: 14,
+            }}
+          />
+          {(["Todos", "Vazia", "Pedido Feito", "Em Preparo", "Comida Pronta"] as const).map((status) => (
+            <button
+              key={status}
+              onClick={() => setStatusFilter(status)}
+              style={{
+                border: statusFilter === status ? "2px solid #2563EB" : "1px solid #E5E7EB",
+                borderRadius: 999,
+                padding: "8px 14px",
+                background: statusFilter === status ? "#EFF6FF" : "#fff",
+                color: statusFilter === status ? "#2563EB" : "#4B5563",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {status}
+            </button>
+          ))}
         </div>
 
         {isLoading && (
@@ -120,11 +212,11 @@ export function CashierPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(6, 1fr)",
-            gap: 24
+            gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))",
+            gap: 20
           }}
         >
-          {mesas.map((mesa) => {
+          {filteredMesas.map((mesa) => {
             const style = statusColor[mesa.status];
             return (
               <button

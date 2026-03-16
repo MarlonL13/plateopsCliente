@@ -1,23 +1,33 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { useSocket } from "../socket";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import { Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from "@mui/material";
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Button,
+} from "@mui/material";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
 type PaymentMethod = "ONLINE" | "CASH";
+type TipPreset = 0 | 5 | 10 | 15;
+
+const formatMoney = (value: number) => `R$ ${value.toFixed(2)}`;
 
 const CheckoutForm = ({
   onPaymentSuccess,
-  tableTotal,
+  payableAmount,
 }: {
   onPaymentSuccess: () => void;
-  tableTotal: number;
+  payableAmount: number;
 }) => {
   const stripe = useStripe();
   const elements = useElements();
@@ -72,7 +82,7 @@ const CheckoutForm = ({
           transition: "all 0.2s",
         }}
       >
-        {isProcessing ? "Processando..." : `Confirmar Pgt. (R$ ${tableTotal.toFixed(2)})`}
+        {isProcessing ? "Processando..." : `Confirmar Pgt. (${formatMoney(payableAmount)})`}
       </button>
     </form>
   );
@@ -112,6 +122,10 @@ const PaymentPage: React.FC = () => {
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
   const [clientSecret, setClientSecret] = useState<string>("");
   const [confirmCashOpen, setConfirmCashOpen] = useState(false);
+  const [tipPreset, setTipPreset] = useState<TipPreset>(0);
+  const [useCustomTip, setUseCustomTip] = useState(false);
+  const [customTipInput, setCustomTipInput] = useState("");
+  const [splitCount, setSplitCount] = useState(1);
 
   useEffect(() => {
     if (refreshCount > 0) {
@@ -130,15 +144,35 @@ const PaymentPage: React.FC = () => {
     enabled: !isNaN(tableNumber),
   });
 
-  // Fetch the Stripe PaymentIntent clientSecret when ONLINE is selected.
-  // This hook must run before any early returns so hook order is stable.
+  const orders = data?.orders ?? [];
+  const tableTotal = data?.tableTotal ?? 0;
+
+  const customTipValue = useMemo(() => {
+    const parsed = Number(customTipInput.replace(",", "."));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }, [customTipInput]);
+
+  const tipAmount = useMemo(() => {
+    if (useCustomTip) {
+      return customTipValue;
+    }
+    return (tableTotal * tipPreset) / 100;
+  }, [tableTotal, tipPreset, useCustomTip, customTipValue]);
+
+  const payableAmount = useMemo(() => tableTotal + tipAmount, [tableTotal, tipAmount]);
+  const splitValue = useMemo(() => payableAmount / splitCount, [payableAmount, splitCount]);
+
   useEffect(() => {
-    if (selectedMethod === "ONLINE" && !clientSecret && data?.tableTotal && data.tableTotal > 0) {
+    if (selectedMethod !== "ONLINE") {
+      return;
+    }
+
+    if (payableAmount > 0) {
       apiFetch<{ clientSecret: string }>("/api/payments/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: data.tableTotal,
+          amount: payableAmount,
           tableNumber,
           currency: "brl",
         }),
@@ -146,7 +180,7 @@ const PaymentPage: React.FC = () => {
         .then((res) => setClientSecret(res.clientSecret))
         .catch((err) => console.error("Erro ao gerar payment intent", err));
     }
-  }, [selectedMethod, clientSecret, data?.tableTotal, tableNumber]);
+  }, [selectedMethod, payableAmount, tableNumber]);
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -185,10 +219,6 @@ const PaymentPage: React.FC = () => {
       </div>
     );
   }
-
-  // Safe read of data for rendering (data may be undefined during loading)
-  const orders = data?.orders ?? [];
-  const tableTotal = data?.tableTotal ?? 0;
 
   const handlePay = () => {
     if (!selectedMethod) {
@@ -356,13 +386,112 @@ const PaymentPage: React.FC = () => {
               <span style={{ color: "#6B7280" }}>Total dos Itens</span>
               <span style={{ fontWeight: 600 }}>R$ {tableTotal.toFixed(2)}</span>
             </div>
+
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#374151" }}>
+                Gorjeta
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
+                {([0, 5, 10, 15] as TipPreset[]).map((tip) => {
+                  const active = !useCustomTip && tipPreset === tip;
+                  return (
+                    <button
+                      key={tip}
+                      onClick={() => {
+                        setUseCustomTip(false);
+                        setTipPreset(tip);
+                      }}
+                      style={{
+                        padding: "8px 6px",
+                        borderRadius: 8,
+                        border: active ? "2px solid #2563EB" : "1px solid #E5E7EB",
+                        background: active ? "#EFF6FF" : "#fff",
+                        color: active ? "#2563EB" : "#374151",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        fontSize: 12,
+                      }}
+                    >
+                      {tip}%
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => setUseCustomTip((prev) => !prev)}
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: useCustomTip ? "2px solid #2563EB" : "1px solid #E5E7EB",
+                    background: useCustomTip ? "#EFF6FF" : "#fff",
+                    color: useCustomTip ? "#2563EB" : "#374151",
+                    fontWeight: 600,
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Valor custom
+                </button>
+                <input
+                  value={customTipInput}
+                  onChange={(event) => setCustomTipInput(event.target.value)}
+                  disabled={!useCustomTip}
+                  placeholder="Ex: 8.50"
+                  style={{
+                    flex: 1,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    background: useCustomTip ? "#fff" : "#F9FAFB",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#374151" }}>
+                Dividir Conta
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                  <button
+                    key={count}
+                    onClick={() => setSplitCount(count)}
+                    style={{
+                      padding: "8px 6px",
+                      borderRadius: 8,
+                      border: splitCount === count ? "2px solid #2563EB" : "1px solid #E5E7EB",
+                      background: splitCount === count ? "#EFF6FF" : "#fff",
+                      color: splitCount === count ? "#2563EB" : "#374151",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      fontSize: 12,
+                    }}
+                  >
+                    {count}x
+                  </button>
+                ))}
+              </div>
+            </div>
             
             <div style={{ borderTop: "2px solid #F3F4F6", margin: "20px 0" }} />
+
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <span style={{ color: "#6B7280" }}>Gorjeta</span>
+              <span style={{ fontWeight: 600 }}>{formatMoney(tipAmount)}</span>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <span style={{ color: "#6B7280" }}>Por pessoa ({splitCount}x)</span>
+              <span style={{ fontWeight: 600 }}>{formatMoney(splitValue)}</span>
+            </div>
             
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 32, alignItems: "center" }}>
               <span style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>Total a Pagar</span>
               <span style={{ fontSize: 32, fontWeight: 800, color: "#111827" }}>
-                R$ {tableTotal.toFixed(2)}
+                {formatMoney(payableAmount)}
               </span>
             </div>
 
@@ -377,7 +506,10 @@ const PaymentPage: React.FC = () => {
                   return (
                     <button
                       key={method}
-                      onClick={() => setSelectedMethod(method)}
+                      onClick={() => {
+                        setClientSecret("");
+                        setSelectedMethod(method);
+                      }}
                       style={{
                         padding: "16px 8px",
                         borderRadius: 12,
@@ -404,10 +536,16 @@ const PaymentPage: React.FC = () => {
               <div style={{ marginTop: 24 }}>
                 <Elements stripe={stripePromise} options={{ clientSecret }}>
                   <CheckoutForm
-                    tableTotal={tableTotal}
+                    payableAmount={payableAmount}
                     onPaymentSuccess={() => payMutation.mutate()}
                   />
                 </Elements>
+              </div>
+            )}
+
+            {selectedMethod === "ONLINE" && !clientSecret && (
+              <div style={{ marginTop: 18, fontSize: 13, color: "#6B7280" }}>
+                Preparando pagamento online...
               </div>
             )}
 
@@ -450,7 +588,9 @@ const PaymentPage: React.FC = () => {
         </DialogTitle>
         <DialogContent>
           <DialogContentText id="alert-dialog-description" sx={{ color: "#374151" }}>
-            Você está prestes a registrar o pagamento em <strong>dinheiro/espécie</strong> no valor total de <strong style={{color: "#111827"}}>R$ {tableTotal.toFixed(2)}</strong>.
+            Você está prestes a registrar o pagamento em <strong>dinheiro/espécie</strong> no valor total de <strong style={{color: "#111827"}}>{formatMoney(payableAmount)}</strong>.
+            <br/><br/>
+            Divisão sugerida: <strong>{splitCount}x de {formatMoney(splitValue)}</strong>.
             <br/><br/>
             Deseja confirmar e finalizar a conta da Mesa {tableNumber}?
           </DialogContentText>
