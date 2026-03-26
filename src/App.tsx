@@ -9,11 +9,12 @@ import { WaiterPage } from "./pages/WaiterPage";
 import CreateOrderPage from "./pages/CreateOrderPage";
 import PaymentPage from "./pages/PaymentPage";
 import InsightsPage from "./pages/InsightsPage";
+import { LandingPage } from "./pages/LandingPage";
 
 const App = () => {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
@@ -70,7 +71,7 @@ const App = () => {
         />
       </Route>
 
-      <Route path="*" element={<LoginPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };
