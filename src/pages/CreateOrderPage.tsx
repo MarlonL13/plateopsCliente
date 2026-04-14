@@ -49,6 +49,26 @@ export default function CreateOrderPage() {
   const mesaId = id ?? "";
   const mesaNumero = (location.state as { tableNumber?: number } | null)?.tableNumber;
 
+  const tableDataQuery = useQuery({
+    queryKey: ["table-data", mesaNumero],
+    queryFn: async () => {
+      let num = mesaNumero;
+      if (!num && mesaId) {
+        // Fallback: fetch all tables if state is lost
+        const tables = await apiFetch<{ id: string; number: number }[]>("/api/orders");
+        const t = tables.find((t) => t.id === mesaId);
+        if (t) num = t.number;
+      }
+      if (!num) throw new Error("Table number not found");
+      
+      return apiFetch<{ orders: { orderId: string, status: string, createdAt: string, items: { id: string, name: string | null, quantity: number, total: number }[] }[] }>("/api/orders/table", {
+        method: "POST",
+        body: JSON.stringify({ tableNumber: num }),
+      });
+    },
+    enabled: !!mesaId,
+  });
+
   const [categoria, setCategoria] = useState<Categoria>("Todos");
   // pedido: { [id]: { item, qtd, notes } }
   const [pedido, setPedido] = useState<PedidoAgrupado>({});
@@ -275,140 +295,172 @@ export default function CreateOrderPage() {
             ))}
           </div>
 
-          {/* Pedido atual */}
-          <div style={{
-            width: 370,
-            minHeight: 220,
-            background: "#fff",
-            borderRadius: 16,
-            boxShadow: "0 2px 12px 0 #0001",
-            padding: "28px 24px"
-          }}>
-            <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 18 }}>
-              Pedido Atual
-            </div>
-            {Object.keys(pedido).length === 0 && (
-              <div style={{ color: "#A0AEC0", fontSize: 16, marginTop: 24 }}>
-                Nenhum item adicionado ainda
-              </div>
-            )}
-            {Object.values(pedido).map(({ item, qtd, notes }) => (
-              <div key={item.id} style={{
-                marginBottom: 22,
-                borderBottom: "1px solid #F3F4F6",
-                paddingBottom: 16
+          <div style={{ display: "flex", flexDirection: "column", gap: 24, width: 370 }}>
+            {/* Pedidos Anteriores */}
+            {(tableDataQuery.data?.orders?.length ?? 0) > 0 && (
+              <div style={{
+                background: "#fff",
+                borderRadius: 16,
+                boxShadow: "0 2px 12px 0 #0001",
+                padding: "24px",
+                maxHeight: 400,
+                overflowY: "auto"
               }}>
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  fontWeight: 600,
-                  fontSize: 16,
-                  marginBottom: 4
-                }}>
-                  <span>{item.nome}</span>
-                  <span>R$ {(item.preco * qtd).toFixed(2)}</span>
+                <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 16 }}>
+                  Pedidos da Mesa
                 </div>
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  marginBottom: 8
-                }}>
-                  <button
-                    onClick={() => removerItem(item.id)}
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: "50%",
-                      border: "none",
-                      background: "#F3F4F6",
-                      color: "#444",
-                      fontSize: 22,
-                      fontWeight: 700,
-                      cursor: "pointer"
-                    }}
-                  >−</button>
-                  <span style={{ fontWeight: 700, fontSize: 18 }}>{qtd}</span>
-                  <button
-                    onClick={() => adicionarItem(item)}
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: "50%",
-                      border: "none",
-                      background: "#2563EB",
-                      color: "#fff",
-                      fontSize: 22,
-                      fontWeight: 700,
-                      cursor: "pointer"
-                    }}
-                  >+</button>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Notas especiais (ex: sem cebola)"
-                  value={notes}
-                  onChange={e => atualizarNotas(item.id, e.target.value)}
-                  style={{
-                    width: "100%",
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    padding: "8px 10px",
-                    fontSize: 15,
-                    color: "#222"
-                  }}
-                />
+                {tableDataQuery.data?.orders.map((order) => (
+                  <div key={order.orderId} style={{ marginBottom: 16, borderBottom: "1px solid #f1f2f5", paddingBottom: 12 }}>
+                    <div style={{ fontSize: 13, color: "#888", marginBottom: 6 }}>
+                      Pedido #{order.orderId.slice(-4)} - {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 
+                      {" • "}
+                      <span style={{ fontWeight: 600 }}>{order.status === 'PENDING' ? 'Na Fila' : order.status === 'IN_PROGRESS' ? 'Em Preparo' : 'Pronto'}</span>
+                    </div>
+                    {order.items.map((it) => (
+                      <div key={it.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginBottom: 4 }}>
+                        <span>{it.quantity}x {it.name || "Item Indisponível"}</span>
+                        <span>R$ {it.total.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
-            ))}
-            {/* Total */}
-            {Object.keys(pedido).length > 0 && (
-              <>
-                <div style={{
-                  borderTop: "1px solid #F3F4F6",
-                  margin: "18px 0 10px 0",
-                  paddingTop: 12,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontWeight: 700,
-                  fontSize: 20
-                }}>
-                  <span>Total</span>
-                  <span>R$ {total.toFixed(2)}</span>
-                </div>
-                <button
-                  onClick={finalizarPedido}
-                  disabled={criarPedido.isPending || !userId}
-                  style={{
-                    marginTop: 10,
-                    width: "100%",
-                    background: "#22C55E",
-                    color: "#fff",
-                    fontWeight: 700,
-                    fontSize: 17,
-                    border: "none",
-                    borderRadius: 10,
-                    padding: "14px 0",
-                    cursor: "pointer",
-                    boxShadow: "0 2px 8px 0 #22c55e22"
-                  }}
-                >
-                  {criarPedido.isPending ? "Enviando..." : "Enviar para a Cozinha"}
-                </button>
-                {!userId && (
-                  <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
-                    Usuário não autenticado.
-                  </div>
-                )}
-                {criarPedido.isError && (
-                  <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
-                    {criarPedido.error instanceof Error
-                      ? criarPedido.error.message
-                      : "Erro ao enviar pedido."}
-                  </div>
-                )}
-              </>
             )}
+
+            {/* Pedido atual */}
+            <div style={{
+              minHeight: 220,
+              background: "#fff",
+              borderRadius: 16,
+              boxShadow: "0 2px 12px 0 #0001",
+              padding: "28px 24px"
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 18 }}>
+                Novo Pedido
+              </div>
+              {Object.keys(pedido).length === 0 && (
+                <div style={{ color: "#A0AEC0", fontSize: 16, marginTop: 24 }}>
+                  Nenhum item adicionado ainda
+                </div>
+              )}
+              {Object.values(pedido).map(({ item, qtd, notes }) => (
+                <div key={item.id} style={{
+                  marginBottom: 22,
+                  borderBottom: "1px solid #F3F4F6",
+                  paddingBottom: 16
+                }}>
+                  <div style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    fontWeight: 600,
+                    fontSize: 16,
+                    marginBottom: 4
+                  }}>
+                    <span>{item.nome}</span>
+                    <span>R$ {(item.preco * qtd).toFixed(2)}</span>
+                  </div>
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    marginBottom: 8
+                  }}>
+                    <button
+                      onClick={() => removerItem(item.id)}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: "50%",
+                        border: "none",
+                        background: "#F3F4F6",
+                        color: "#444",
+                        fontSize: 22,
+                        fontWeight: 700,
+                        cursor: "pointer"
+                      }}
+                    >−</button>
+                    <span style={{ fontWeight: 700, fontSize: 18 }}>{qtd}</span>
+                    <button
+                      onClick={() => adicionarItem(item)}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: "50%",
+                        border: "none",
+                        background: "#2563EB",
+                        color: "#fff",
+                        fontSize: 22,
+                        fontWeight: 700,
+                        cursor: "pointer"
+                      }}
+                    >+</button>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Notas especiais (ex: sem cebola)"
+                    value={notes}
+                    onChange={e => atualizarNotas(item.id, e.target.value)}
+                    style={{
+                      width: "100%",
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 8,
+                      padding: "8px 10px",
+                      fontSize: 15,
+                      color: "#222"
+                    }}
+                  />
+                </div>
+              ))}
+              {/* Total */}
+              {Object.keys(pedido).length > 0 && (
+                <>
+                  <div style={{
+                    borderTop: "1px solid #F3F4F6",
+                    margin: "18px 0 10px 0",
+                    paddingTop: 12,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontWeight: 700,
+                    fontSize: 20
+                  }}>
+                    <span>Total</span>
+                    <span>R$ {total.toFixed(2)}</span>
+                  </div>
+                  <button
+                    onClick={finalizarPedido}
+                    disabled={criarPedido.isPending || !userId}
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      background: "#22C55E",
+                      color: "#fff",
+                      fontWeight: 700,
+                      fontSize: 17,
+                      border: "none",
+                      borderRadius: 10,
+                      padding: "14px 0",
+                      cursor: "pointer",
+                      boxShadow: "0 2px 8px 0 #22c55e22"
+                    }}
+                  >
+                    {criarPedido.isPending ? "Enviando..." : "Enviar para a Cozinha"}
+                  </button>
+                  {!userId && (
+                    <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
+                      Usuário não autenticado.
+                    </div>
+                  )}
+                  {criarPedido.isError && (
+                    <div style={{ color: "#B91C1C", fontSize: 14, marginTop: 10 }}>
+                      {criarPedido.error instanceof Error
+                        ? criarPedido.error.message
+                        : "Erro ao enviar pedido."}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
